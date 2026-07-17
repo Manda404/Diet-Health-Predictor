@@ -1,0 +1,18 @@
+Person_ID,Age,Gender,Height_cm,Weight_kg,BMI,Activity_Level,Daily_Calorie_Requirement,Daily_Calorie_Consumed,Protein_Intake_g,Carbohydrate_Intake_g,Fat_Intake_g,Water_Intake_Liters,Diet_Type,Health_Status
+P0001,45,Male,180.0,80.0,24.7,Moderately Active,2500,2500,150.0,250.0,70.0,2.5,Balanced,Healthy
+P0002,30,Female,165.0,60.0,22.0,Lightly Active,2000,1900,90.0,220.0,60.0,2.2,Vegetarian,Healthy
+P0003,60,Male,175.0,95.0,31.0,Sedentary,2200,2600,120.0,300.0,90.0,1.5,High Protein,Obese
+P0004,22,Female,160.0,45.0,17.6,Very Active,2100,1800,80.0,200.0,50.0,2.0,Vegan,Underweight
+P0005,50,Other,170.0,70.0,24.2,Athlete,2800,2900,160.0,280.0,80.0,3.0,Keto,Healthy
+P0006,35,Male,178.0,90.0,28.4,Moderately Active,2400,2600,130.0,260.0,85.0,1.8,Mediterranean,Overweight
+P0007,17,Female,155.0,50.0,20.8,Sedentary,1800,1750,70.0,210.0,45.0,2.0,Balanced,Healthy
+P0008,68,Male,172.0,78.0,26.4,Lightly Active,2100,2050,100.0,230.0,65.0,2.1,Balanced,Overweight
+P0009,29,Female,163.0,58.0,21.8,,2000,1950,85.0,215.0,55.0,2.3,Vegetarian,Healthy
+P0010,59,Male,177.0,82.0,26.2,Sedentary,2150,2300,95.0,240.0,75.0,1.6,High Protein,Overweight
+P0011,18,Female,158.0,52.0,20.8,Lightly Active,1900,1850,75.0,205.0,48.0,2.0,Balanced,Healthy
+P0001,45,Male,180.0,80.0,24.7,Moderately Active,2500,2500,150.0,250.0,70.0,2.5,Balanced,Healthy
+P0012,40,Female,168.0,,23.0,Very Active,2300,2200,110.0,230.0,65.0,2.4,Keto,Healthy
+P0013,33,Male,170.0,85.0,29.4,Moderately Active,2500,2400,120.0,250.0,,2.0,Vegan,Overweight
+P0014,55,Male,182.0,110.0,33.2,Sedentary,2300,2900,140.0,320.0,900.0,1.4,Balanced,Obese
+P0015,25,Female,162.0,58.0,22.1,Moderately Active,2000,1950,90.0,220.0,58.0,2.2,Mediterranean,Healthy
+P0016,20,Male,175.0,55.0,17.9,Very Active,2400,2100,85.0,240.0,55.0,2.0,Vegan,Underweight

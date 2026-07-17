@@ -1,0 +1,28 @@
+# Staging Configuration
+# Used for testing before production deployment
+
+environment: staging
+debug: false
+log_level: INFO
+
+# Data Configuration
+data:
+  raw_data_path: "data/healthy_diet_calorie_intake.csv"
+  processed_data_path: "data/processed_staging"
+  sample_size: null  # Use all data in staging
+
+# Model Configuration
+model:
+  test_size: 0.15
+  random_state: 42
+  
+# API Configuration
+api:
+  host: "0.0.0.0"
+  port: 8000
+  reload: false
+
+# Storage Configuration
+storage:
+  cache_enabled: true
+  cache_dir: ".cache/staging"

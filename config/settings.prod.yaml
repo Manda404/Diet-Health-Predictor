@@ -1,0 +1,28 @@
+# Production Configuration
+# Used for production deployment with optimized settings
+
+environment: production
+debug: false
+log_level: WARNING
+
+# Data Configuration
+data:
+  raw_data_path: "/opt/data/healthy_diet_calorie_intake.csv"
+  processed_data_path: "/opt/data/processed_prod"
+  sample_size: null  # Use all data in production
+
+# Model Configuration
+model:
+  test_size: 0.1
+  random_state: 42
+  
+# API Configuration
+api:
+  host: "0.0.0.0"
+  port: 8000
+  reload: false
+
+# Storage Configuration
+storage:
+  cache_enabled: true
+  cache_dir: "/var/cache/diet-health-predictor"

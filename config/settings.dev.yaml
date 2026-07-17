@@ -1,0 +1,28 @@
+# Development Configuration
+# Used for local development with verbose logging and sample data
+
+environment: development
+debug: true
+log_level: DEBUG
+
+# Data Configuration
+data:
+  raw_data_path: "data/healthy_diet_calorie_intake.csv"
+  processed_data_path: "data/processed"
+  sample_size: null  # Use all data in dev, can set to e.g., 100 for testing
+
+# Model Configuration
+model:
+  test_size: 0.2
+  random_state: 42
+  
+# API Configuration (if applicable)
+api:
+  host: "127.0.0.1"
+  port: 8000
+  reload: true
+
+# Storage Configuration
+storage:
+  cache_enabled: false
+  cache_dir: ".cache/dev"

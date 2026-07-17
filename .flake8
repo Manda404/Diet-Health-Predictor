@@ -1,0 +1,10 @@
+[flake8]
+max-line-length = 100
+# E203 (whitespace before ':') conflicts with black's slice formatting.
+# W503 (line break before binary operator) conflicts with black's preferred style.
+extend-ignore = E203, W503
+# __init__.py files re-export names for their layer's public API; those
+# imports are consumed via `from package import Name` elsewhere, not used
+# in-file, which flake8 can't see.
+per-file-ignores =
+    */__init__.py:F401
