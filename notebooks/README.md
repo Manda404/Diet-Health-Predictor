@@ -33,16 +33,18 @@ This directory contains Jupyter notebooks for exploring and testing the Diet-Hea
 
 ### 📗 `02_data_preprocessing.ipynb`
 
-**Purpose:** Phase 2 walkthrough — cleaning, feature engineering, encoding/scaling, and splitting
+**Purpose:** Phase 2 walkthrough — cleaning, feature engineering, splitting, drift-checking, and encoding/scaling
 
 **What you'll learn:**
-- Infrastructure layer: `DataCleaner`, `FeatureEngineer`, `FeatureTransformer`, `DataSplitter`, `ProcessedDataWriter`
+- Infrastructure layer: `DataCleaner`, `FeatureEngineer`, `FeatureTransformer`, `DataSplitter`, `DriftDetector`, `ProcessedDataWriter`
 - Application layer: `PreprocessDataUseCase` orchestrating the full pipeline
 - Presentation layer: running everything via `HealthDietAPI.preprocess_data()`
 - How the derived features (`Age_Group`, `Calorie_Balance`, macro ratios, etc.) relate to the target
 - Why `BMI`/`Height_cm`/`Weight_kg` and everything derived from them are computed but
   excluded from the model's feature set (`LEAKING_NUMERIC_COLUMNS`) -- full investigation
   in `03_model_training.ipynb`, section 1
+- Checking the train/test split itself for drift (PSI + KS test) right after it's created,
+  on the raw/engineered columns (numeric *and* categorical in one pass)
 
 **Key Sections:**
 1. **Setup & Configuration**
@@ -50,9 +52,10 @@ This directory contains Jupyter notebooks for exploring and testing the Diet-Hea
 3. **Data Cleaning** - `DataCleaner`
 4. **Feature Engineering** - `FeatureEngineer`
 5. **Train/Test Split** - `DataSplitter`
-6. **Encoding & Scaling** - `FeatureTransformer`
-7. **Full Pipeline** - `PreprocessDataUseCase` via `HealthDietAPI`
-8. **Quick Feature Sanity Checks**
+6. **Check for Data Drift** - `DriftDetector`, train vs. test on the raw/engineered columns
+7. **Encoding & Scaling** - `FeatureTransformer`
+8. **Full Pipeline** - `PreprocessDataUseCase` via `HealthDietAPI`
+9. **Quick Feature Sanity Checks**
 
 **Execution Time:** ~1-2 minutes
 
@@ -66,23 +69,60 @@ This directory contains Jupyter notebooks for exploring and testing the Diet-Hea
 - How to detect target leakage: checking whether `Health_Status` is a deterministic
   function of `BMI` (it is), and measuring how far the leak spreads via `Height_cm`/`Weight_kg`
   and their derived features, with empirical before/after accuracy comparisons
-- Infrastructure layer: `XGBoostWrapper`, `CatBoostWrapper` (uniform fit/predict/save/load/get_evals_result contract)
-- Application layer: `TrainModelUseCase`, `CrossValidateModelUseCase`, `CompareModelsUseCase`, `best_model()`, `save_best_model()`
-- Presentation layer: `HealthDietAPI.train_model()` / `cross_validate_model()` / `compare_models()` / `select_best_model()`
+- How to check for data drift between train and test (PSI + KS test) before
+  trusting any test-set metric
+- Infrastructure layer: `XGBoostWrapper`, `CatBoostWrapper` (uniform fit/predict/save/load/get_evals_result contract), `DriftDetector`
+- Application layer: `TrainModelUseCase`, `CrossValidateModelUseCase`, `CompareModelsUseCase`, `best_model()`, `save_best_model()`, `AnalyzeDataDriftUseCase`
+- Presentation layer: `HealthDietAPI.train_model()` / `cross_validate_model()` / `compare_models()` / `select_best_model()` / `analyze_data_drift()`
 - Reading train/eval curves to diagnose overfitting
 - Why hyperparameters live entirely in `settings.model.{xgboost,catboost}_params` (YAML), never hardcoded in the wrapper code
 
 **Key Sections:**
+- **Setup & Configuration**
 1. **Data Leakage Investigation** - BMI-to-Health_Status determinism check, empirical
    accuracy comparison across feature subsets, the `LEAKING_NUMERIC_COLUMNS` fix
-2. **Setup & Configuration**
-3. **Load & Preprocess Data** - Phase 2 recap via `HealthDietAPI.preprocess_data()`, now leak-free
+2. **Load & Preprocess Data** - Phase 2 recap via `HealthDietAPI.preprocess_data()`, now leak-free
+3. **Data Drift Check** - `HealthDietAPI.analyze_data_drift()` (PSI + KS test, X_train vs. X_test)
 4. **Train a Single Model** - `HealthDietAPI.train_model()`
 5. **Train/Eval Curves** - per-iteration train vs. validation metric
 6. **Train CatBoost Too** - same pipeline, second model
 7. **Cross-Validation** - `HealthDietAPI.cross_validate_model()`
 8. **Compare & Select Best Model** - `HealthDietAPI.compare_models()` + `select_best_model()` (by MCC, by default)
 9. **Confusion Matrix**
+
+**Execution Time:** ~1-2 minutes
+
+---
+
+### 📕 `04_api_testing.ipynb`
+
+**Purpose:** Phase 4 walkthrough — serving the persisted best model over HTTP with FastAPI
+
+**What you'll learn:**
+- The inference-time gap Phase 4 had to close first: `DataCleaner.transform()`
+  now skips columns absent from a single incoming record (e.g. `Person_ID`,
+  `Health_Status`), and `DataCleaner` itself is now persisted (`save()`/`load()`)
+  alongside `FeatureTransformer` so prediction-time cleaning reuses the exact
+  training-derived impute values/outlier bounds
+- Application layer: `PredictHealthStatusUseCase` — replays
+  `clean -> engineer -> encode/scale` on one raw record before calling
+  `model.predict_proba()`
+- Presentation layer: `HealthDietAPI.predict_health_status()` /
+  `get_best_model_info()`, then the FastAPI app itself
+  (`presentation/api_app.py`, `presentation/schemas.py`)
+- Testing the API in-process with `TestClient` — no server to start
+- A sanity check on the Phase 3 leakage fix: changing only `Weight_kg`/`BMI`
+  barely moves the prediction (both are excluded model features), while a
+  genuine calorie surplus does
+
+**Key Sections:**
+- **Setup & Configuration**
+1. **Train & Persist a Best Model** - recap of Phases 2-3 (`preprocess_data()`,
+   `compare_models()`, `select_best_model()`)
+2. **The Prediction Pipeline Directly** - `HealthDietAPI.predict_health_status()`
+3. **The FastAPI App** - routes, schemas, OpenAPI docs
+4. **Testing the API** - `TestClient`, valid and invalid (422) requests
+5. **Running the Server for Real** - `uvicorn`, `curl`
 
 **Execution Time:** ~1-2 minutes
 
@@ -186,7 +226,6 @@ Each notebook follows this structure:
 
 Planned notebooks for upcoming phases:
 
-- `04_api_testing.ipynb` - Testing API endpoints (when built)
 - `05_deployment_guide.ipynb` - Deploying to different environments
 
 ---
@@ -204,14 +243,19 @@ Planned notebooks for upcoming phases:
 | **Infrastructure** | `infrastructure/models/` | `XGBoostWrapper`, `CatBoostWrapper` |
 | **Application** | `application/model_training.py` | `TrainModelUseCase` |
 | **Application** | `application/model_evaluation.py` | `CrossValidateModelUseCase`, `CompareModelsUseCase`, `best_model()`, `save_best_model()` |
+| **Infrastructure** | `infrastructure/drift.py` | `DriftDetector` |
+| **Application** | `application/data_drift.py` | `AnalyzeDataDriftUseCase` |
+| **Application** | `application/prediction.py` | `PredictHealthStatusUseCase` |
 | **Presentation** | `presentation/__init__.py` | `HealthDietAPI` |
+| **Presentation** | `presentation/schemas.py` | `PredictionRequest`, `PredictionResponse` |
+| **Presentation** | `presentation/api_app.py` | FastAPI `app` (`/health`, `/model/info`, `/predict`) |
 
 ---
 
 ## Notes
 
 - **Python Version:** 3.14+
-- **Main Dependencies:** pandas, pydantic, pyyaml, scikit-learn, joblib, xgboost, catboost
+- **Main Dependencies:** pandas, pydantic, pyyaml, scikit-learn, joblib, xgboost, catboost, scipy
 - **Kernel:** Python 3.x (poetry environment)
 - **Working Directory:** Should be project root or notebooks folder
 

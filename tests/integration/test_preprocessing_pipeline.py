@@ -12,6 +12,7 @@ import pytest
 
 from diet_health_predictor.application.feature_engineering import PreprocessDataUseCase
 from diet_health_predictor.infrastructure import (
+    DataCleaner,
     FeatureTransformer,
     HealthDietDataLoader,
     get_dataset_summary,
@@ -64,6 +65,7 @@ class TestPreprocessDataUseCase:
         assert (tmp_path / "y_train.csv").exists()
         assert (tmp_path / "y_test.csv").exists()
         assert (tmp_path / "feature_transformer.joblib").exists()
+        assert (tmp_path / "data_cleaner.joblib").exists()
 
     def test_persisted_x_train_matches_the_returned_result(self, preprocess_use_case, tmp_path):
         """Regression check that ProcessedDataWriter wrote exactly what the use case returned."""
@@ -77,6 +79,23 @@ class TestPreprocessDataUseCase:
         result = preprocess_use_case.execute()
         reloaded_transformer = FeatureTransformer.load(result.transformer_path)
         assert reloaded_transformer.feature_names_out() == result.feature_names
+
+    def test_saved_cleaner_reloads_and_transforms_a_record_missing_id_and_target(
+        self, preprocess_use_case, mock_raw_df
+    ):
+        # A prediction-time record (Phase 4) has no Person_ID/Health_Status --
+        # transform() must not require columns it hasn't seen since training.
+        result = preprocess_use_case.execute()
+        reloaded_cleaner = DataCleaner.load(result.cleaner_path)
+
+        # P0009 (index 8) has a missing Activity_Level -- exercises imputation
+        # via the training-derived mode, not just a pass-through no-op.
+        record = mock_raw_df.drop(columns=["Person_ID", "Health_Status"]).iloc[[8]]
+        assert record["Activity_Level"].isna().all()
+        transformed = reloaded_cleaner.transform(record)
+
+        assert len(transformed) == 1
+        assert transformed.isna().sum().sum() == 0
 
     def test_split_is_reproducible_given_the_same_random_state(self, mock_csv_path, tmp_path):
         loader = HealthDietDataLoader(str(mock_csv_path))

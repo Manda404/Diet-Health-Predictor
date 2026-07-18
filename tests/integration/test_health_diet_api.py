@@ -77,6 +77,29 @@ class TestHealthDietAPIIntegration:
         assert (tmp_path / "feature_transformer.joblib").exists()
         assert (tmp_path / "X_train.csv").exists()
 
+    def test_analyze_data_drift_reports_the_stratified_split_as_stable(
+        self, api, mock_csv_path, monkeypatch
+    ):
+        # The mock dataset is tiny (16 rows after cleaning), so a stratified
+        # split can only be expected to be roughly balanced, not perfectly
+        # drift-free -- this just checks the report shape/columns, not that
+        # every feature comes back "none" (unlike the real dataset, where it
+        # reliably does; see the notebook for that check).
+        monkeypatch.setattr(api, "data_path", mock_csv_path)
+        preprocessing_result = api.preprocess_data()
+
+        drift = api.analyze_data_drift(preprocessing_result)
+
+        assert drift.n_features_checked == len(preprocessing_result.feature_names)
+        assert list(drift.report.columns) == [
+            "feature",
+            "psi",
+            "ks_statistic",
+            "ks_pvalue",
+            "drift_severity",
+        ]
+        assert isinstance(drift.has_major_drift, bool)
+
     @pytest.mark.parametrize("model_type", list(ModelType))
     def test_train_model_runs_the_full_phase_3_pipeline(
         self, model_type, api, mock_csv_path, tmp_path, monkeypatch
@@ -197,3 +220,69 @@ class TestHealthDietAPIIntegration:
         api.print_summary()  # must not raise
 
         assert "Error:" in capsys.readouterr().out
+
+    def test_predict_health_status_end_to_end(self, api, mock_csv_path, tmp_path, monkeypatch):
+        monkeypatch.setattr(api, "data_path", mock_csv_path)
+        monkeypatch.setattr(api.settings.model, "models_output_dir", str(tmp_path / "models"))
+
+        preprocessing_result = api.preprocess_data()
+        comparison = api.compare_models(preprocessing_result)
+        api.select_best_model(comparison)
+
+        record = {
+            "Age": 30,
+            "Gender": "Male",
+            "Height_cm": 175.0,
+            "Weight_kg": 70.0,
+            "BMI": 22.86,
+            "Activity_Level": "Moderately Active",
+            "Daily_Calorie_Requirement": 2200,
+            "Daily_Calorie_Consumed": 2100,
+            "Protein_Intake_g": 90.0,
+            "Carbohydrate_Intake_g": 250.0,
+            "Fat_Intake_g": 70.0,
+            "Water_Intake_Liters": 2.5,
+            "Diet_Type": "Balanced",
+        }
+        result = api.predict_health_status(record)
+
+        assert result.predicted_health_status in {
+            "Healthy",
+            "Overweight",
+            "Obese",
+            "Underweight",
+        }
+        assert sum(result.probabilities.values()) == pytest.approx(1.0, abs=1e-6)
+
+    def test_predict_health_status_raises_a_clear_error_before_a_model_is_trained(
+        self, api, mock_csv_path, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(api, "data_path", mock_csv_path)
+        monkeypatch.setattr(api.settings.model, "models_output_dir", str(tmp_path / "models"))
+        api.preprocess_data()  # transformer/cleaner exist, but no model trained yet
+
+        with pytest.raises(FileNotFoundError, match="No best model found"):
+            api.predict_health_status({"Age": 30})
+
+    def test_get_best_model_info_reports_the_winning_model_and_metric(
+        self, api, mock_csv_path, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(api, "data_path", mock_csv_path)
+        monkeypatch.setattr(api.settings.model, "models_output_dir", str(tmp_path / "models"))
+
+        preprocessing_result = api.preprocess_data()
+        comparison = api.compare_models(preprocessing_result)
+        winner = api.select_best_model(comparison)
+
+        info = api.get_best_model_info()
+
+        assert info["model_type"] == winner.value
+        assert info["selection_metric"] == "mcc"
+
+    def test_get_best_model_info_raises_a_clear_error_before_a_model_is_trained(
+        self, api, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(api.settings.model, "models_output_dir", str(tmp_path / "models"))
+
+        with pytest.raises(FileNotFoundError, match="No best model found"):
+            api.get_best_model_info()

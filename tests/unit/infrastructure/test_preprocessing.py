@@ -94,6 +94,36 @@ class TestDataCleaner:
 
         assert cleaned_test["value"].iloc[0] < 1000
 
+    def test_transform_skips_columns_absent_from_the_incoming_frame(self):
+        # A single-record prediction-time DataFrame (Phase 4) won't carry
+        # Person_ID/Health_Status, even though those were present at fit()
+        # time -- transform() must not require them.
+        train_df = pd.DataFrame(
+            {
+                "Person_ID": ["A", "B", "C"],
+                "Health_Status": ["Healthy", "Obese", "Healthy"],
+                "value": [10.0, 20.0, 30.0],
+            }
+        )
+        record = pd.DataFrame({"value": [np.nan]})
+
+        cleaner = DataCleaner().fit(train_df)
+        transformed = cleaner.transform(record)
+
+        assert transformed["value"].iloc[0] == 20.0  # training median
+        assert list(transformed.columns) == ["value"]
+
+    def test_save_and_load_round_trip_preserves_fitted_state(self, tmp_path):
+        train_df = pd.DataFrame({"Person_ID": ["A", "B", "C"], "value": [10.0, 20.0, np.nan]})
+        cleaner = DataCleaner(outlier_columns=["value"]).fit(train_df)
+
+        path = str(tmp_path / "data_cleaner.joblib")
+        cleaner.save(path)
+        reloaded = DataCleaner.load(path)
+
+        test_df = pd.DataFrame({"Person_ID": ["D"], "value": [np.nan]})
+        pd.testing.assert_frame_equal(cleaner.transform(test_df), reloaded.transform(test_df))
+
 
 class TestFeatureEngineer:
     """

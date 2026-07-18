@@ -10,6 +10,7 @@ data:
   raw_data_path: "/opt/data/healthy_diet_calorie_intake.csv"
   processed_data_path: "/opt/data/processed_prod"
   sample_size: null  # Use all data in production
+  target_column: "Health_Status"
 
 # Model Configuration
 model:

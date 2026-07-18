@@ -15,6 +15,7 @@ This package demonstrates best practices for building data science applications 
 - ✅ Poetry for dependency management
 - ✅ Data cleaning, feature engineering, and encoding/scaling (scikit-learn)
 - ✅ Boosting model training, cross-validation, and comparison (XGBoost, CatBoost)
+- ✅ Prediction REST API (FastAPI) serving the persisted best model
 
 ## Quick Start
 
@@ -95,15 +96,20 @@ Diet-Health-Predictor/
 │   │   ├── use_cases.py                # Load / Analyze use cases
 │   │   ├── feature_engineering.py      # Phase 2: PreprocessDataUseCase
 │   │   ├── model_training.py           # Phase 3: TrainModelUseCase
-│   │   └── model_evaluation.py         # Phase 3: CrossValidateModelUseCase, CompareModelsUseCase
+│   │   ├── model_evaluation.py         # Phase 3: CrossValidateModelUseCase, CompareModelsUseCase
+│   │   ├── data_drift.py               # AnalyzeDataDriftUseCase (PSI + KS test)
+│   │   └── prediction.py               # Phase 4: PredictHealthStatusUseCase
 │   ├── infrastructure/                 # Infrastructure layer (I/O)
 │   │   ├── __init__.py                 # Re-exports
 │   │   ├── data_loader.py              # Raw data loading & validation
 │   │   ├── preprocessing.py            # Cleaning, feature engineering,
 │   │   │                               # encoding/scaling, splitting, persistence
+│   │   ├── drift.py                    # DriftDetector (PSI + KS test)
 │   │   └── models/                     # XGBoostWrapper, CatBoostWrapper
 │   └── presentation/                   # Presentation layer (API)
-│       └── __init__.py                 # User-facing interface
+│       ├── __init__.py                 # HealthDietAPI, the internal facade
+│       ├── schemas.py                  # Phase 4: FastAPI request/response models
+│       └── api_app.py                  # Phase 4: FastAPI app (/health, /model/info, /predict)
 ├── config/                             # Configuration files
 │   ├── settings.dev.yaml               # Development settings
 │   ├── settings.staging.yaml           # Staging settings
@@ -363,6 +369,78 @@ winner without persisting anything.
 See `notebooks/03_model_training.ipynb` for a full walkthrough, including
 plotting the train/eval curves.
 
+### Data Drift Check
+
+Before trusting any metric computed on the test set, `HealthDietAPI.analyze_data_drift()`
+checks that `X_train` and `X_test` are actually comparable populations, using
+two signals per feature:
+
+- **PSI** (Population Stability Index) — bins the train distribution and
+  measures how much test's bin proportions have shifted (`< 0.1` none,
+  `0.1-0.25` moderate, `> 0.25` major — standard industry thresholds)
+- **KS test** (Kolmogorov-Smirnov, two-sample) — an independent statistical
+  cross-check on the same question
+
+```python
+drift = api.analyze_data_drift(prep)
+print(drift.report)              # per-feature: psi, ks_statistic, ks_pvalue, drift_severity
+print(drift.drifted_features)    # features flagged moderate/major
+print(drift.has_major_drift)     # bool, for a quick pass/fail gate
+```
+
+A healthy stratified split (`DataSplitter`) should report no drift on the
+real dataset. The same `AnalyzeDataDriftUseCase`/`DriftDetector` also applies
+to comparing train against a future production dataset, not just the test split.
+
+## Prediction API (Phase 4)
+
+A FastAPI app (`presentation/api_app.py`) serves the persisted best model
+(`settings.model.models_output_dir/best/`) over HTTP. It's a thin controller
+layer: each route validates its request with a Pydantic schema
+(`presentation/schemas.py`), then delegates to `HealthDietAPI` — no business
+logic lives in the HTTP layer itself.
+
+```bash
+# Train + persist a best model first (see above), then:
+poetry run uvicorn diet_health_predictor.presentation.api_app:app --reload
+```
+
+Interactive docs (Swagger UI) are then available at `http://127.0.0.1:8000/docs`.
+
+| Method | Path          | Purpose                                                        |
+|--------|---------------|-----------------------------------------------------------------|
+| GET    | `/health`     | Liveness check — status + current environment                   |
+| GET    | `/model/info` | Which model won `select_best_model()`, by what metric/value     |
+| POST   | `/predict`    | Predict `Health_Status` for one raw record                      |
+
+```bash
+curl -X POST http://127.0.0.1:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "age": 30, "gender": "Male", "height_cm": 175.0, "weight_kg": 70.0,
+    "activity_level": "Moderately Active", "diet_type": "Balanced",
+    "daily_calorie_requirement": 2200, "daily_calorie_consumed": 2100,
+    "protein_intake_g": 90.0, "carbohydrate_intake_g": 250.0,
+    "fat_intake_g": 70.0, "water_intake_liters": 2.5
+  }'
+# {"predicted_health_status": "Healthy", "probabilities": {"Healthy": 0.999, ...}}
+```
+
+`PredictionRequest` takes the same raw fields as the source CSV, minus
+`Person_ID` and `Health_Status` (the target). `BMI` isn't asked of the caller —
+it's derived server-side (`Weight_kg / (Height_cm/100)²`), same as the source
+data. Malformed input (e.g. negative age, an unknown `gender`/`activity_level`/
+`diet_type`) is rejected with `422` before any use case runs; a missing best
+model is reported as `404` with a message pointing at `compare_models()` +
+`select_best_model()`.
+
+Behind the scenes, `PredictHealthStatusUseCase` replays the exact training
+pipeline on the one incoming record — the training-fit `DataCleaner` (now
+persisted alongside the `FeatureTransformer` under
+`settings.data.processed_data_path/`), then `FeatureEngineer`, then the
+training-fit `FeatureTransformer` — before handing it to the persisted model.
+See `notebooks/04_api_testing.ipynb` for a full walkthrough via `TestClient`.
+
 ## Development Workflow
 
 ### 1. **Install Dependencies**
@@ -427,10 +505,10 @@ Logs are stored in `logs/{environment}.log`
 ## Next Steps
 
 **Phase 1** (clean architecture, config, data loading), **Phase 2** (data
-preprocessing & feature engineering), and **Phase 3** (model training,
-cross-validation, comparison) are complete. Planned future phases:
+preprocessing & feature engineering), **Phase 3** (model training,
+cross-validation, comparison), and **Phase 4** (FastAPI prediction endpoint)
+are complete. Planned future phases:
 
-- **Phase 4:** API endpoints (FastAPI)
 - **Phase 5:** Database integration
 - **Phase 6:** Docker containerization
 - **Phase 7:** Deployment pipeline

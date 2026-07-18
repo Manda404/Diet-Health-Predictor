@@ -8,6 +8,7 @@ Handles all I/O and third-party library concerns:
   and persisting processed data
 - `models`: one wrapper per boosting classifier (XGBoost, CatBoost), all
   sharing the same fit/predict/save/load/get_evals_result contract
+- `drift`: PSI / KS-test feature drift detection between two datasets
 
 Following Clean Architecture principles:
 - No business logic here, just I/O and library-specific operations
@@ -20,6 +21,7 @@ from diet_health_predictor.infrastructure.data_loader import (
     HealthDietDataLoader,
     get_dataset_summary,
 )
+from diet_health_predictor.infrastructure.drift import DriftDetector
 from diet_health_predictor.infrastructure.models import (
     BaseModelWrapper,
     CatBoostWrapper,
@@ -46,4 +48,5 @@ __all__ = [
     "BaseModelWrapper",
     "XGBoostWrapper",
     "CatBoostWrapper",
+    "DriftDetector",
 ]

@@ -11,20 +11,25 @@ The Presentation layer contains:
 This layer depends on Application and Infrastructure but not vice versa.
 """
 
+import json
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional, cast
 
 import pandas as pd
 
 from diet_health_predictor.application import (
+    AnalyzeDataDriftUseCase,
     AnalyzeHealthStatsUseCase,
     CompareModelsUseCase,
     CrossValidateModelUseCase,
     CrossValidationResult,
+    DataDriftResult,
     LoadHealthDietDataUseCase,
     ModelTrainingResult,
     ModelType,
+    PredictHealthStatusUseCase,
+    PredictionResult,
     PreprocessDataUseCase,
     PreprocessingResult,
     TrainModelUseCase,
@@ -231,6 +236,85 @@ class HealthDietAPI:
         return save_best_model(
             comparison, self.settings.model.models_output_dir, metric=resolved_metric
         )
+
+    def analyze_data_drift(self, preprocessing_result: PreprocessingResult) -> DataDriftResult:
+        """
+        Compare X_train vs. X_test feature distributions (PSI + KS test per
+        feature) to check the train/test split isn't accidentally skewed.
+
+        A healthy stratified split should show little to no drift; if it
+        does, metrics computed on the test set are less trustworthy, since
+        train and test are no longer really comparable populations. The same
+        use case also applies to comparing train against a future production
+        dataset -- just pass that DataFrame as `current` directly via
+        `AnalyzeDataDriftUseCase` instead of going through this method.
+
+        Args:
+            preprocessing_result: Output of `preprocess_data()`.
+
+        Returns:
+            DataDriftResult with the per-feature report (DataFrame) and a
+            pass/fail-style summary (drifted_features, has_major_drift).
+        """
+        logger.info("Analyzing train/test data drift via API...")
+        use_case = AnalyzeDataDriftUseCase()
+        return use_case.execute(preprocessing_result.X_train, preprocessing_result.X_test)
+
+    def predict_health_status(self, raw_record: dict[str, Any]) -> PredictionResult:
+        """
+        Predict `Health_Status` for a single raw record (Phase 4).
+
+        Loads the fitted `DataCleaner`/`FeatureTransformer` from
+        `settings.data.processed_data_path` and the best model + label
+        encoder from `settings.model.models_output_dir/best` -- run
+        `preprocess_data()` and `select_best_model()` first if these don't
+        exist yet.
+
+        Args:
+            raw_record: A single record with the same raw columns as the
+                source CSV (minus `Person_ID` and the target column),
+                e.g. `{"Age": 30, "Gender": "Male", "Height_cm": 175.0, ...}`.
+
+        Returns:
+            PredictionResult with the predicted label and per-class
+            probabilities.
+        """
+        best_dir = Path(self.settings.model.models_output_dir) / "best"
+        processed_dir = Path(self.settings.data.processed_data_path)
+        self._require_exists(
+            best_dir / "model.joblib",
+            "No best model found -- run compare_models() + select_best_model() first.",
+        )
+        self._require_exists(
+            processed_dir / "feature_transformer.joblib",
+            "No fitted transformer found -- run preprocess_data() first.",
+        )
+
+        use_case = PredictHealthStatusUseCase(
+            cleaner_path=str(processed_dir / "data_cleaner.joblib"),
+            transformer_path=str(processed_dir / "feature_transformer.joblib"),
+            model_path=str(best_dir / "model.joblib"),
+            label_encoder_path=str(best_dir / "label_encoder.joblib"),
+        )
+        return use_case.execute(raw_record)
+
+    def get_best_model_info(self) -> dict:
+        """
+        Metadata about the currently persisted best model
+        (`settings.model.models_output_dir/best/metadata.json`): which
+        `ModelType` won, by what metric, and its value.
+        """
+        metadata_path = Path(self.settings.model.models_output_dir) / "best" / "metadata.json"
+        self._require_exists(
+            metadata_path,
+            "No best model found -- run compare_models() + select_best_model() first.",
+        )
+        return cast(dict, json.loads(metadata_path.read_text()))
+
+    @staticmethod
+    def _require_exists(path: Path, message: str) -> None:
+        if not path.exists():
+            raise FileNotFoundError(f"{message} (expected {path})")
 
     def _hyperparameters_for(self, model_type: ModelType) -> dict:
         """settings.model.{xgboost,catboost}_params for the given model type."""

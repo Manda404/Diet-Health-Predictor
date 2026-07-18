@@ -7,9 +7,12 @@ log_level: DEBUG
 
 # Data Configuration
 data:
-  raw_data_path: "data/healthy_diet_calorie_intake.csv"
+  raw_data_path: "data/raw/healthy_diet_calorie_intake.csv"
   processed_data_path: "data/processed"
   sample_size: null  # Use all data in dev, can set to e.g., 100 for testing
+  # Column DataSplitter stratifies on when splitting train/test, and the
+  # target LoadHealthDietDataUseCase/TrainModelUseCase predict.
+  target_column: "Health_Status"
 
 # Model Configuration
 model:

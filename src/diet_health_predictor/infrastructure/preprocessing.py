@@ -96,13 +96,22 @@ class DataCleaner:
             raise RuntimeError("DataCleaner must be fitted before calling transform()")
         df = df.copy()
 
+        # Columns absent here (e.g. Person_ID/Health_Status on a single
+        # inference-time record that carries only feature columns) are
+        # skipped rather than raising -- fit() records values for every
+        # column seen in the training data, which is a superset of what
+        # any later caller is guaranteed to provide.
         for column, fill_value in self._impute_values.items():
+            if column not in df.columns:
+                continue
             missing = df[column].isna().sum()
             if missing:
                 df[column] = df[column].fillna(fill_value)
                 logger.info(f"Imputed {missing} missing value(s) in '{column}' with {fill_value}")
 
         for column, (lower, upper) in self._outlier_bounds.items():
+            if column not in df.columns:
+                continue
             clipped = ((df[column] < lower) | (df[column] > upper)).sum()
             if clipped:
                 logger.info(
@@ -115,6 +124,15 @@ class DataCleaner:
     def fit_transform(self, df: pd.DataFrame) -> pd.DataFrame:
         """Convenience for the (train-only) fit + transform of the same data."""
         return self.fit(df).transform(df)
+
+    def save(self, path: str) -> None:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump(self, path)
+        logger.info(f"Saved DataCleaner to {path}")
+
+    @classmethod
+    def load(cls, path: str) -> "DataCleaner":
+        return cast("DataCleaner", joblib.load(path))
 
 
 class FeatureEngineer:
@@ -300,3 +318,6 @@ class ProcessedDataWriter:
 
     def transformer_path(self) -> str:
         return str(self.output_dir / "feature_transformer.joblib")
+
+    def cleaner_path(self) -> str:
+        return str(self.output_dir / "data_cleaner.joblib")

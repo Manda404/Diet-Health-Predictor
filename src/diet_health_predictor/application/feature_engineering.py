@@ -97,6 +97,7 @@ class PreprocessingResult:
     y_test: pd.Series
     feature_names: list[str]
     transformer_path: str
+    cleaner_path: str
 
 
 class PreprocessDataUseCase:
@@ -160,6 +161,7 @@ class PreprocessDataUseCase:
         writer.write_features(X_train, X_test)
         writer.write_targets(y_train, y_test)
         transformer.save(writer.transformer_path())
+        cleaner.save(writer.cleaner_path())
 
         logger.info(
             f"Preprocessing complete: {X_train.shape[1]} features, "
@@ -173,4 +175,5 @@ class PreprocessDataUseCase:
             y_test=y_test,
             feature_names=transformer.feature_names_out(),
             transformer_path=writer.transformer_path(),
+            cleaner_path=writer.cleaner_path(),
         )

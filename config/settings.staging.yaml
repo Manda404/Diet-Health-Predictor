@@ -7,9 +7,10 @@ log_level: INFO
 
 # Data Configuration
 data:
-  raw_data_path: "data/healthy_diet_calorie_intake.csv"
+  raw_data_path: "data/raw/healthy_diet_calorie_intake.csv"
   processed_data_path: "data/processed_staging"
   sample_size: null  # Use all data in staging
+  target_column: "Health_Status"
 
 # Model Configuration
 model:

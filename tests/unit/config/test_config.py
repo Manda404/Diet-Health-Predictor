@@ -22,6 +22,10 @@ class TestDataConfigDefaults:
         assert data_config.sample_size is None
         assert data_config.target_column == "Health_Status"
 
+    def test_dev_yaml_defines_target_column(self):
+        settings = Settings.from_yaml(env="dev")
+        assert settings.data.target_column == "Health_Status"
+
 
 class TestModelConfigDefaults:
     def test_defaults(self):

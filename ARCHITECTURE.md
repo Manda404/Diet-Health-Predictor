@@ -141,19 +141,21 @@ class DataLoader:
 
 **Contents:**
 ```python
-# API interface
+# Internal facade
 - HealthDietAPI
 
 # Entry points
 - main()
 
-# (Controllers - to be added for FastAPI)
+# FastAPI HTTP layer (Phase 4)
+- schemas.py: PredictionRequest, PredictionResponse, ModelInfoResponse, HealthCheckResponse
+- api_app.py: FastAPI app -- GET /health, GET /model/info, POST /predict
 ```
 
 **Key Characteristics:**
 - ✅ Depends on Application layer
 - ✅ Formats responses for consumers
-- ✅ Handles HTTP requests (when API added)
+- ✅ Handles HTTP requests via FastAPI (`api_app.py`)
 - ✅ Simple, delegating to use cases
 
 **Why this approach:**
@@ -455,22 +457,103 @@ train/eval metric, which the rest of this phase is built around.
 - All hyperparameter-driven methods read from `settings.model.{xgboost,catboost}_params`
   via a shared `_hyperparameters_for(model_type)` helper
 
+## Data Drift Detection
+
+Added alongside Phase 3 to answer a question that matters before trusting any
+test-set metric: are train and test actually comparable populations?
+
+### Infrastructure Layer addition (`infrastructure/drift.py`)
+
+- **`DriftDetector`** - `analyze(reference, current)` returns a per-feature
+  report DataFrame (`feature`, `psi`, `ks_statistic`, `ks_pvalue`,
+  `drift_severity`), sorted by PSI descending. Two signals per feature:
+  - **PSI** (Population Stability Index) - bins the reference distribution
+    (quantile-based for continuous columns; raw category/value counts for
+    low-cardinality ones, e.g. one-hot 0/1 dummies, so they aren't binned
+    into a meaningless single bucket) and measures how much the current
+    distribution's bin proportions have shifted. Thresholds of 0.1 / 0.25
+    (moderate / major) are the standard industry defaults, both configurable
+  - **KS test** (two-sample Kolmogorov-Smirnov) - an independent statistical
+    cross-check on the same question
+
+### Application Layer addition (`application/data_drift.py`)
+
+- **`AnalyzeDataDriftUseCase`** - wraps `DriftDetector`, adding a
+  `DataDriftResult` summary (`n_features_checked`, `drifted_features`,
+  `has_major_drift`) on top of the raw per-feature report -- useful as a
+  quick pass/fail gate, e.g. before deploying a retrained model
+
+### Presentation Layer addition
+
+- **`HealthDietAPI.analyze_data_drift(preprocessing_result)`** - compares
+  `X_train` vs. `X_test`. A healthy stratified split should show no drift on
+  the real dataset; the same use case applies just as well to comparing
+  train against a future production dataset instead of the test split.
+
+## Prediction API (Phase 4)
+
+Serves the persisted best model over HTTP. Built as a thin HTTP layer on top
+of the existing `HealthDietAPI` facade, rather than a parallel implementation
+of the prediction pipeline -- the FastAPI routes contain no business logic.
+
+### A new inference-time gap this phase had to close first
+
+Every prior phase fit/transformed whole train/test DataFrames; a live
+prediction request is a *single record*, missing columns those DataFrames
+always had (`Person_ID`, and critically `Health_Status` -- the very thing
+being predicted). Two changes were needed in `infrastructure/preprocessing.py`
+before single-record inference could work at all:
+
+- **`DataCleaner.transform()`** iterated its fitted impute/outlier columns
+  unconditionally, so a record missing e.g. `Health_Status` (present at
+  `fit()` time on the full raw training data) raised `KeyError`. Fixed to
+  skip any column absent from the incoming frame -- `fit()`'s column set is
+  now treated as a superset of what any later caller must provide.
+- **`DataCleaner.save()`/`.load()`** added (mirroring `FeatureTransformer`)
+  and wired into `PreprocessDataUseCase`/`ProcessedDataWriter` (new
+  `cleaner_path()`, persisted as `data_cleaner.joblib` alongside
+  `feature_transformer.joblib`) -- prediction-time cleaning must reuse the
+  exact training-derived impute values/outlier bounds, not recompute
+  statistics from a single incoming record.
+
+### Application Layer addition (`application/prediction.py`)
+
+- **`PredictHealthStatusUseCase`** - loads the fitted `DataCleaner` +
+  `FeatureTransformer` (from `settings.data.processed_data_path`) and the
+  best model + label encoder (from `settings.model.models_output_dir/best/`),
+  then replays `clean -> engineer -> encode/scale` on the one incoming raw
+  record before calling `model.predict_proba()`. Returns a `PredictionResult`
+  (predicted label + per-class probabilities).
+
+### Presentation Layer additions
+
+- **`HealthDietAPI.predict_health_status(raw_record)`** - resolves the
+  cleaner/transformer/model/label-encoder paths from settings and delegates
+  to `PredictHealthStatusUseCase`; raises `FileNotFoundError` with an
+  actionable message if `preprocess_data()`/`select_best_model()` haven't
+  run yet.
+- **`HealthDietAPI.get_best_model_info()`** - reads
+  `models_output_dir/best/metadata.json` (same file `save_best_model()`
+  writes in Phase 3).
+- **`schemas.py`** - Pydantic request/response models. `PredictionRequest`
+  mirrors the raw CSV columns (minus `Person_ID`/`Health_Status`); `BMI` is
+  derived server-side (`Weight_kg / (Height_cm/100)²`) rather than asked of
+  the caller, since it's a deterministic function of the two (see the Data
+  Leakage Investigation notebook). Field constraints (`gt=0`, `Literal`/enum
+  membership for `gender`/`activity_level`/`diet_type`) reject malformed
+  input with `422` before any use case runs.
+- **`api_app.py`** - the FastAPI app itself: `GET /health`, `GET /model/info`,
+  `POST /predict`. Each route is a few lines: validate via the Pydantic
+  schema, call `HealthDietAPI`, map a missing-artifact `FileNotFoundError` to
+  `404`. Run with `uvicorn diet_health_predictor.presentation.api_app:app`.
+
 ## Future Improvements
 
-### Phase 4: API Layer
-- [ ] FastAPI endpoints
-- [ ] Request/response models
-- [ ] Error handling and status codes
-- [ ] API documentation (OpenAPI)
-
-### Phase 5: Testing
-- [ ] Unit tests for each layer
-- [ ] Integration tests
-- [ ] E2E tests
-- [ ] Mocking strategies
+### Phase 5: Database Integration
+- [ ] Persist predictions/requests for auditing
+- [ ] Swap the CSV data source for a database-backed loader
 
 ### Phase 6: Scalability
-- [ ] Database integration
 - [ ] Caching layer
 - [ ] Async operations
 - [ ] Distributed processing
