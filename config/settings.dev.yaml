@@ -15,7 +15,26 @@ data:
 model:
   test_size: 0.2
   random_state: 42
-  
+  models_output_dir: "models"
+  # Metric HealthDietAPI.select_best_model() uses to pick a winner from
+  # compare_models() (and persist it to models_output_dir/best/). One of:
+  # accuracy, precision_macro, recall_macro, f1_macro, mcc.
+  selection_metric: "mcc"
+  # Passed directly to XGBClassifier(**xgboost_params) / CatBoostClassifier(**catboost_params).
+  # This is the single source of truth for every model default: the wrapper
+  # code itself hardcodes nothing but random_state. Remove a key (or the whole
+  # section) to fall back to that library's own built-in default instead.
+  xgboost_params:
+    n_estimators: 1500
+    max_depth: 6
+    learning_rate: 0.1
+    eval_metric: "mlogloss"
+  catboost_params:
+    iterations: 1500
+    depth: 6
+    learning_rate: 0.1
+    verbose: false
+
 # API Configuration (if applicable)
 api:
   host: "127.0.0.1"

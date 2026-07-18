@@ -16,26 +16,37 @@ pytestmark = pytest.mark.unit
 
 
 class TestDataCleaner:
-    def test_drops_duplicate_person_ids(self, mock_raw_df):
-        cleaner = DataCleaner()
-        cleaned = cleaner.clean(mock_raw_df)
-        assert len(cleaned) == 16  # 17 rows, 1 exact duplicate of P0001
-        assert cleaned["Person_ID"].duplicated().sum() == 0
+    """
+    `fit()`/`transform()` mirror `FeatureTransformer`: statistics (median/mode,
+    IQR bounds) are learned from whatever is passed to `fit()` and applied to
+    whatever is passed to `transform()` -- deliberately allowing a caller to
+    fit on train and transform a *different* test set, unlike the old
+    single-shot `clean()` this replaced.
+    """
 
-    def test_imputes_all_missing_values(self, mock_raw_df):
+    def test_drop_duplicates_removes_duplicate_person_ids(self, mock_raw_df):
+        deduped = DataCleaner().drop_duplicates(mock_raw_df)
+        assert len(deduped) == 16  # 17 rows, 1 exact duplicate of P0001
+        assert deduped["Person_ID"].duplicated().sum() == 0
+
+    def test_transform_before_fit_raises(self, mock_raw_df):
+        with pytest.raises(RuntimeError, match="must be fitted"):
+            DataCleaner().transform(mock_raw_df)
+
+    def test_fit_transform_imputes_all_missing_values(self, mock_raw_df):
         assert mock_raw_df.isna().sum().sum() > 0  # sanity check the fixture actually has gaps
         cleaner = DataCleaner()
-        cleaned = cleaner.clean(mock_raw_df)
+        cleaned = cleaner.fit_transform(cleaner.drop_duplicates(mock_raw_df))
         assert cleaned.isna().sum().sum() == 0
 
     def test_imputes_numeric_column_with_median(self):
         df = pd.DataFrame({"Person_ID": ["A", "B", "C"], "value": [10.0, 20.0, np.nan]})
-        cleaned = DataCleaner().clean(df)
+        cleaned = DataCleaner().fit_transform(df)
         assert cleaned.loc[cleaned["Person_ID"] == "C", "value"].iloc[0] == 15.0
 
     def test_imputes_categorical_column_with_mode(self):
         df = pd.DataFrame({"Person_ID": ["A", "B", "C", "D"], "category": ["x", "x", "y", None]})
-        cleaned = DataCleaner().clean(df)
+        cleaned = DataCleaner().fit_transform(df)
         assert cleaned.loc[cleaned["Person_ID"] == "D", "category"].iloc[0] == "x"
 
     def test_clips_outliers_to_iqr_bounds(self):
@@ -46,14 +57,42 @@ class TestDataCleaner:
             }
         )
         cleaner = DataCleaner(outlier_columns=["value"])
-        cleaned = cleaner.clean(df)
+        cleaned = cleaner.fit_transform(df)
         assert cleaned["value"].max() < 1000
 
     def test_columns_not_listed_as_outlier_targets_are_left_untouched(self):
         df = pd.DataFrame({"Person_ID": [f"P{i}" for i in range(5)], "value": [1, 2, 3, 4, 1000]})
         cleaner = DataCleaner(outlier_columns=[])  # nothing targeted
-        cleaned = cleaner.clean(df)
+        cleaned = cleaner.fit_transform(df)
         assert cleaned["value"].max() == 1000
+
+    def test_fit_on_train_applies_train_derived_median_to_test(self):
+        """
+        The whole point of fit()/transform(): a test row's own missing value
+        is filled with the *training* set's median, not one computed from
+        the test row's own (single-row, undefined) distribution.
+        """
+        train_df = pd.DataFrame({"Person_ID": ["A", "B", "C"], "value": [10.0, 20.0, 30.0]})
+        test_df = pd.DataFrame({"Person_ID": ["D"], "value": [np.nan]})
+
+        cleaner = DataCleaner().fit(train_df)
+        cleaned_test = cleaner.transform(test_df)
+
+        assert cleaned_test["value"].iloc[0] == 20.0  # median of the training set
+
+    def test_fit_on_train_applies_train_derived_outlier_bounds_to_test(self):
+        train_df = pd.DataFrame(
+            {
+                "Person_ID": [f"P{i}" for i in range(10)],
+                "value": [10, 11, 9, 10, 11, 9, 10, 11, 9, 10],
+            }
+        )
+        test_df = pd.DataFrame({"Person_ID": ["T1"], "value": [1000]})
+
+        cleaner = DataCleaner(outlier_columns=["value"]).fit(train_df)
+        cleaned_test = cleaner.transform(test_df)
+
+        assert cleaned_test["value"].iloc[0] < 1000
 
 
 class TestFeatureEngineer:
@@ -222,21 +261,24 @@ class TestFeatureTransformer:
 
 class TestDataSplitter:
     def test_split_sizes_add_up_to_the_input(self, mock_raw_df):
-        cleaned = DataCleaner().clean(mock_raw_df)
+        cleaner = DataCleaner()
+        cleaned = cleaner.fit_transform(cleaner.drop_duplicates(mock_raw_df))
         train_df, test_df = DataSplitter().split(
             cleaned, target_column="Health_Status", test_size=0.25, random_state=42
         )
         assert len(train_df) + len(test_df) == len(cleaned)
 
     def test_split_has_no_overlapping_person_ids(self, mock_raw_df):
-        cleaned = DataCleaner().clean(mock_raw_df)
+        cleaner = DataCleaner()
+        cleaned = cleaner.fit_transform(cleaner.drop_duplicates(mock_raw_df))
         train_df, test_df = DataSplitter().split(
             cleaned, target_column="Health_Status", test_size=0.25, random_state=42
         )
         assert set(train_df["Person_ID"]) & set(test_df["Person_ID"]) == set()
 
     def test_split_is_reproducible_with_the_same_random_state(self, mock_raw_df):
-        cleaned = DataCleaner().clean(mock_raw_df)
+        cleaner = DataCleaner()
+        cleaned = cleaner.fit_transform(cleaner.drop_duplicates(mock_raw_df))
         train_1, test_1 = DataSplitter().split(cleaned, "Health_Status", 0.25, random_state=7)
         train_2, test_2 = DataSplitter().split(cleaned, "Health_Status", 0.25, random_state=7)
         pd.testing.assert_frame_equal(train_1, train_2)

@@ -15,7 +15,19 @@ data:
 model:
   test_size: 0.15
   random_state: 42
-  
+  models_output_dir: "models_staging"
+  selection_metric: "mcc"
+  xgboost_params:
+    n_estimators: 300
+    max_depth: 6
+    learning_rate: 0.05
+    eval_metric: "mlogloss"
+  catboost_params:
+    iterations: 300
+    depth: 6
+    learning_rate: 0.05
+    verbose: false
+
 # API Configuration
 api:
   host: "0.0.0.0"

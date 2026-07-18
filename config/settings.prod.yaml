@@ -15,7 +15,19 @@ data:
 model:
   test_size: 0.1
   random_state: 42
-  
+  models_output_dir: "/opt/data/models_prod"
+  selection_metric: "mcc"
+  xgboost_params:
+    n_estimators: 500
+    max_depth: 8
+    learning_rate: 0.03
+    eval_metric: "mlogloss"
+  catboost_params:
+    iterations: 500
+    depth: 8
+    learning_rate: 0.03
+    verbose: false
+
 # API Configuration
 api:
   host: "0.0.0.0"

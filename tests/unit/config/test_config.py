@@ -9,7 +9,7 @@ pytest is invoked from.
 import pytest
 
 import diet_health_predictor.config as config_module
-from diet_health_predictor.config import DataConfig, Settings
+from diet_health_predictor.config import DataConfig, ModelConfig, Settings
 
 pytestmark = pytest.mark.unit
 
@@ -21,6 +21,25 @@ class TestDataConfigDefaults:
         assert data_config.processed_data_path == "data/processed"
         assert data_config.sample_size is None
         assert data_config.target_column == "Health_Status"
+
+
+class TestModelConfigDefaults:
+    def test_defaults(self):
+        model_config = ModelConfig()
+        assert model_config.test_size == 0.2
+        assert model_config.random_state == 42
+        assert model_config.models_output_dir == "models"
+        # Empty by default -- each wrapper's _build_model() only hardcodes
+        # random_state, so an empty dict here means "use the library's own
+        # defaults for everything else".
+        assert model_config.xgboost_params == {}
+        assert model_config.catboost_params == {}
+        assert model_config.selection_metric == "mcc"
+
+    def test_dev_yaml_defines_hyperparameters_for_both_boosting_models(self):
+        settings = Settings.from_yaml(env="dev")
+        assert settings.model.xgboost_params
+        assert settings.model.catboost_params
 
 
 class TestSettingsFromYaml:

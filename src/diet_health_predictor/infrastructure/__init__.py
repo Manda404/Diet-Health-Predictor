@@ -6,6 +6,8 @@ Handles all I/O and third-party library concerns:
 - `data_loader`: reading and validating the raw CSV dataset
 - `preprocessing`: cleaning, feature engineering, encoding/scaling, splitting,
   and persisting processed data
+- `models`: one wrapper per boosting classifier (XGBoost, CatBoost), all
+  sharing the same fit/predict/save/load/get_evals_result contract
 
 Following Clean Architecture principles:
 - No business logic here, just I/O and library-specific operations
@@ -17,6 +19,11 @@ from diet_health_predictor.infrastructure.data_loader import (
     DataLoadError,
     HealthDietDataLoader,
     get_dataset_summary,
+)
+from diet_health_predictor.infrastructure.models import (
+    BaseModelWrapper,
+    CatBoostWrapper,
+    XGBoostWrapper,
 )
 from diet_health_predictor.infrastructure.preprocessing import (
     DataCleaner,
@@ -30,10 +37,13 @@ __all__ = [
     "DataLoadError",
     "DataLoader",
     "HealthDietDataLoader",
-    "summarize_dataset",
+    "get_dataset_summary",
     "DataCleaner",
     "DataSplitter",
     "FeatureEngineer",
     "FeatureTransformer",
     "ProcessedDataWriter",
+    "BaseModelWrapper",
+    "XGBoostWrapper",
+    "CatBoostWrapper",
 ]

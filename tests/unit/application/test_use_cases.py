@@ -76,7 +76,8 @@ class TestLoadHealthDietDataUseCase:
     def clean_mock_df(self, mock_raw_df):
         from diet_health_predictor.infrastructure import DataCleaner
 
-        return DataCleaner().clean(mock_raw_df)
+        cleaner = DataCleaner()
+        return cleaner.fit_transform(cleaner.drop_duplicates(mock_raw_df))
 
     def test_converts_every_row_to_a_diet_assessment(self, clean_mock_df):
         use_case = LoadHealthDietDataUseCase(StubDataLoader(clean_mock_df))

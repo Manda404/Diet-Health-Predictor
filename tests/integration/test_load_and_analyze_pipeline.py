@@ -24,7 +24,8 @@ pytestmark = pytest.mark.integration
 @pytest.fixture
 def clean_csv_path(mock_csv_path, tmp_path):
     raw_df = pd.read_csv(mock_csv_path)
-    clean_df = DataCleaner().clean(raw_df)
+    cleaner = DataCleaner()
+    clean_df = cleaner.fit_transform(cleaner.drop_duplicates(raw_df))
     path = tmp_path / "clean_mock_diet_data.csv"
     clean_df.to_csv(path, index=False)
     return path

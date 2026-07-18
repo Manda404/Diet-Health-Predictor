@@ -30,22 +30,31 @@ logger = logging.getLogger(__name__)
 
 
 class DataCleaner:
-    """Cleans a raw DataFrame: duplicates, missing values, outliers."""
+    """
+    Cleans a DataFrame: duplicates, missing values, outliers.
+
+    Deduplication is stateless (`drop_duplicates()`) and meant to run on the
+    full dataset *before* splitting -- it must, so an exact-duplicate row
+    can't end up once in train and once in test.
+
+    Imputation and outlier clipping are learned from data (median/mode,
+    IQR bounds) and follow the same fit/transform split as
+    `FeatureTransformer`: `fit()` on the training split only, then
+    `transform()` applies those training-derived values to both train and
+    test. Fitting them on the full dataset before splitting would leak
+    test-set statistics into the values used to clean the training data.
+    """
 
     def __init__(
         self, outlier_columns: Optional[list[str]] = None, outlier_iqr_factor: float = 3.0
     ):
         self.outlier_columns = outlier_columns or []
         self.outlier_iqr_factor = outlier_iqr_factor
+        self._impute_values: dict = {}
+        self._outlier_bounds: dict = {}
+        self._fitted = False
 
-    def clean(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Run the full cleaning pipeline and return a new DataFrame"""
-        df = self._drop_duplicates(df)
-        df = self._impute_missing(df)
-        df = self._clip_outliers(df)
-        return df
-
-    def _drop_duplicates(self, df: pd.DataFrame) -> pd.DataFrame:
+    def drop_duplicates(self, df: pd.DataFrame) -> pd.DataFrame:
         before = len(df)
         df = df.drop_duplicates(subset="Person_ID" if "Person_ID" in df.columns else None)
         dropped = before - len(df)
@@ -53,37 +62,59 @@ class DataCleaner:
             logger.info(f"Dropped {dropped} duplicate row(s)")
         return df.reset_index(drop=True)
 
-    def _impute_missing(self, df: pd.DataFrame) -> pd.DataFrame:
-        df = df.copy()
+    def fit(self, df: pd.DataFrame) -> "DataCleaner":
+        # Learn an impute value for every column unconditionally -- not just
+        # ones with a missing value *at fit time* -- so a column that's
+        # complete in the fitting data but has a gap in whatever gets
+        # transform()'d later (typically the test split) still has a valid
+        # training-derived fallback ready.
+        self._impute_values = {}
         for column in df.columns:
-            missing = df[column].isna().sum()
-            if missing == 0:
-                continue
             if pd.api.types.is_numeric_dtype(df[column]):
-                fill_value = df[column].median()
+                self._impute_values[column] = df[column].median()
             else:
-                fill_value = df[column].mode(dropna=True).iloc[0]
-            df[column] = df[column].fillna(fill_value)
-            logger.info(f"Imputed {missing} missing value(s) in '{column}' with {fill_value}")
-        return df
+                mode = df[column].mode(dropna=True)
+                if not mode.empty:
+                    self._impute_values[column] = mode.iloc[0]
 
-    def _clip_outliers(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Clip numeric columns to [Q1 - k*IQR, Q3 + k*IQR] to tame extreme values"""
-        df = df.copy()
+        self._outlier_bounds = {}
         for column in self.outlier_columns:
             if column not in df.columns:
                 continue
             q1, q3 = df[column].quantile([0.25, 0.75])
             iqr = q3 - q1
-            lower = q1 - self.outlier_iqr_factor * iqr
-            upper = q3 + self.outlier_iqr_factor * iqr
+            self._outlier_bounds[column] = (
+                q1 - self.outlier_iqr_factor * iqr,
+                q3 + self.outlier_iqr_factor * iqr,
+            )
+
+        self._fitted = True
+        return self
+
+    def transform(self, df: pd.DataFrame) -> pd.DataFrame:
+        if not self._fitted:
+            raise RuntimeError("DataCleaner must be fitted before calling transform()")
+        df = df.copy()
+
+        for column, fill_value in self._impute_values.items():
+            missing = df[column].isna().sum()
+            if missing:
+                df[column] = df[column].fillna(fill_value)
+                logger.info(f"Imputed {missing} missing value(s) in '{column}' with {fill_value}")
+
+        for column, (lower, upper) in self._outlier_bounds.items():
             clipped = ((df[column] < lower) | (df[column] > upper)).sum()
             if clipped:
                 logger.info(
                     f"Clipped {clipped} outlier(s) in '{column}' to [{lower:.2f}, {upper:.2f}]"
                 )
             df[column] = df[column].clip(lower, upper)
+
         return df
+
+    def fit_transform(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Convenience for the (train-only) fit + transform of the same data."""
+        return self.fit(df).transform(df)
 
 
 class FeatureEngineer:

@@ -57,7 +57,33 @@ ENGINEERED_NUMERIC_COLUMNS = [
 ]
 ENGINEERED_CATEGORICAL_COLUMNS = ["Age_Group"]
 
-NUMERIC_FEATURES = RAW_NUMERIC_COLUMNS + ENGINEERED_NUMERIC_COLUMNS
+# `Health_Status` is a deterministic function of `BMI` in this dataset (WHO
+# BMI thresholds, verified on the full 6000-row dataset with zero exceptions)
+# -- a model given BMI trivially learns the threshold rule (100% accuracy).
+# `Height_cm`/`Weight_kg` jointly reconstruct BMI almost perfectly (~98%
+# accuracy with BMI removed but those two kept), and every engineered column
+# below is itself a function of Height_cm/Weight_kg (BMR, Ideal_Weight_kg,
+# Weight_Deviation_kg, and the two per-kg-bodyweight ratios), so excluding
+# BMI alone is not enough. These columns are still computed by
+# `FeatureEngineer` (useful for analysis/notebooks) but excluded here from
+# the columns the model actually trains on.
+LEAKING_NUMERIC_COLUMNS = [
+    "Height_cm",
+    "Weight_kg",
+    "BMI",
+    "BMR",
+    "Activity_Calorie_Multiplier",
+    "Protein_per_kg_Bodyweight",
+    "Water_Intake_ml_per_kg",
+    "Ideal_Weight_kg",
+    "Weight_Deviation_kg",
+]
+
+NUMERIC_FEATURES = [
+    column
+    for column in RAW_NUMERIC_COLUMNS + ENGINEERED_NUMERIC_COLUMNS
+    if column not in LEAKING_NUMERIC_COLUMNS
+]
 CATEGORICAL_FEATURES = RAW_CATEGORICAL_COLUMNS + ENGINEERED_CATEGORICAL_COLUMNS
 
 
@@ -77,7 +103,14 @@ class PreprocessDataUseCase:
     """
     Use Case: Turn raw health diet data into model-ready train/test features.
 
-    Pipeline: load -> clean -> engineer features -> split -> encode/scale -> persist
+    Pipeline: load -> dedup -> split -> clean (fit on train only) ->
+    engineer features -> encode/scale (fit on train only) -> persist.
+
+    Deduplication runs before the split (an exact-duplicate row must not end
+    up once in train and once in test). Imputation, outlier clipping, and
+    encoding/scaling are all fit on the training split only and then applied
+    to test -- fitting any of them on the full dataset before splitting
+    would leak test-set statistics into the training data.
     """
 
     def __init__(
@@ -100,19 +133,28 @@ class PreprocessDataUseCase:
         raw_df = self.data_loader.load(sample_size)
 
         cleaner = DataCleaner(outlier_columns=RAW_NUMERIC_COLUMNS)
-        clean_df = cleaner.clean(raw_df)
+        deduped_df = cleaner.drop_duplicates(raw_df)
 
-        engineered_df = FeatureEngineer().transform(clean_df)
-
-        train_df, test_df = DataSplitter().split(
-            engineered_df, self.target_column, self.test_size, self.random_state
+        train_raw, test_raw = DataSplitter().split(
+            deduped_df, self.target_column, self.test_size, self.random_state
         )
 
+        # Imputation/outlier bounds are fit on the training split only, then
+        # applied to both -- fitting them on the full dataset before the
+        # split would leak test-set statistics into the training data.
+        cleaner.fit(train_raw)
+        train_clean = cleaner.transform(train_raw)
+        test_clean = cleaner.transform(test_raw)
+
+        feature_engineer = FeatureEngineer()
+        train_engineered = feature_engineer.transform(train_clean)
+        test_engineered = feature_engineer.transform(test_clean)
+
         transformer = FeatureTransformer(NUMERIC_FEATURES, CATEGORICAL_FEATURES)
-        X_train = transformer.fit_transform(train_df)
-        X_test = transformer.transform(test_df)
-        y_train = train_df[self.target_column]
-        y_test = test_df[self.target_column]
+        X_train = transformer.fit_transform(train_engineered)
+        X_test = transformer.transform(test_engineered)
+        y_train = train_engineered[self.target_column]
+        y_test = test_engineered[self.target_column]
 
         writer = ProcessedDataWriter(self.output_dir)
         writer.write_features(X_train, X_test)

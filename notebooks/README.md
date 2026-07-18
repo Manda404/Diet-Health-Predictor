@@ -40,6 +40,9 @@ This directory contains Jupyter notebooks for exploring and testing the Diet-Hea
 - Application layer: `PreprocessDataUseCase` orchestrating the full pipeline
 - Presentation layer: running everything via `HealthDietAPI.preprocess_data()`
 - How the derived features (`Age_Group`, `Calorie_Balance`, macro ratios, etc.) relate to the target
+- Why `BMI`/`Height_cm`/`Weight_kg` and everything derived from them are computed but
+  excluded from the model's feature set (`LEAKING_NUMERIC_COLUMNS`) -- full investigation
+  in `03_model_training.ipynb`, section 1
 
 **Key Sections:**
 1. **Setup & Configuration**
@@ -50,6 +53,36 @@ This directory contains Jupyter notebooks for exploring and testing the Diet-Hea
 6. **Encoding & Scaling** - `FeatureTransformer`
 7. **Full Pipeline** - `PreprocessDataUseCase` via `HealthDietAPI`
 8. **Quick Feature Sanity Checks**
+
+**Execution Time:** ~1-2 minutes
+
+---
+
+### 📙 `03_model_training.ipynb`
+
+**Purpose:** Phase 3 walkthrough — investigating data leakage, then training, evaluating, and comparing boosting models on `Health_Status`
+
+**What you'll learn:**
+- How to detect target leakage: checking whether `Health_Status` is a deterministic
+  function of `BMI` (it is), and measuring how far the leak spreads via `Height_cm`/`Weight_kg`
+  and their derived features, with empirical before/after accuracy comparisons
+- Infrastructure layer: `XGBoostWrapper`, `CatBoostWrapper` (uniform fit/predict/save/load/get_evals_result contract)
+- Application layer: `TrainModelUseCase`, `CrossValidateModelUseCase`, `CompareModelsUseCase`, `best_model()`, `save_best_model()`
+- Presentation layer: `HealthDietAPI.train_model()` / `cross_validate_model()` / `compare_models()` / `select_best_model()`
+- Reading train/eval curves to diagnose overfitting
+- Why hyperparameters live entirely in `settings.model.{xgboost,catboost}_params` (YAML), never hardcoded in the wrapper code
+
+**Key Sections:**
+1. **Data Leakage Investigation** - BMI-to-Health_Status determinism check, empirical
+   accuracy comparison across feature subsets, the `LEAKING_NUMERIC_COLUMNS` fix
+2. **Setup & Configuration**
+3. **Load & Preprocess Data** - Phase 2 recap via `HealthDietAPI.preprocess_data()`, now leak-free
+4. **Train a Single Model** - `HealthDietAPI.train_model()`
+5. **Train/Eval Curves** - per-iteration train vs. validation metric
+6. **Train CatBoost Too** - same pipeline, second model
+7. **Cross-Validation** - `HealthDietAPI.cross_validate_model()`
+8. **Compare & Select Best Model** - `HealthDietAPI.compare_models()` + `select_best_model()` (by MCC, by default)
+9. **Confusion Matrix**
 
 **Execution Time:** ~1-2 minutes
 
@@ -153,10 +186,8 @@ Each notebook follows this structure:
 
 Planned notebooks for upcoming phases:
 
-- `03_model_training.ipynb` - Training models, hyperparameter tuning
-- `04_model_evaluation.ipynb` - Metrics, cross-validation, performance analysis
-- `05_api_testing.ipynb` - Testing API endpoints (when built)
-- `06_deployment_guide.ipynb` - Deploying to different environments
+- `04_api_testing.ipynb` - Testing API endpoints (when built)
+- `05_deployment_guide.ipynb` - Deploying to different environments
 
 ---
 
@@ -170,6 +201,9 @@ Planned notebooks for upcoming phases:
 | **Domain** | `domain/__init__.py` | `Person`, `DietAssessment` |
 | **Application** | `application/use_cases.py` | `LoadHealthDietDataUseCase` |
 | **Application** | `application/feature_engineering.py` | `PreprocessDataUseCase` |
+| **Infrastructure** | `infrastructure/models/` | `XGBoostWrapper`, `CatBoostWrapper` |
+| **Application** | `application/model_training.py` | `TrainModelUseCase` |
+| **Application** | `application/model_evaluation.py` | `CrossValidateModelUseCase`, `CompareModelsUseCase`, `best_model()`, `save_best_model()` |
 | **Presentation** | `presentation/__init__.py` | `HealthDietAPI` |
 
 ---
@@ -177,7 +211,7 @@ Planned notebooks for upcoming phases:
 ## Notes
 
 - **Python Version:** 3.14+
-- **Main Dependencies:** pandas, pydantic, pyyaml, scikit-learn, joblib
+- **Main Dependencies:** pandas, pydantic, pyyaml, scikit-learn, joblib, xgboost, catboost
 - **Kernel:** Python 3.x (poetry environment)
 - **Working Directory:** Should be project root or notebooks folder
 

@@ -324,9 +324,15 @@ contracts.
 
 ### Infrastructure Layer additions (`infrastructure/preprocessing.py`)
 
-- **`DataCleaner`** - drops duplicate `Person_ID`s, imputes missing values
-  (median for numeric columns, mode for categorical), clips numeric outliers
-  using the IQR method
+- **`DataCleaner`** - `drop_duplicates()` (stateless, run on the full dataset
+  before splitting so a duplicate row can't land in both train and test) plus
+  `fit()`/`transform()` for imputation (median for numeric columns, mode for
+  categorical) and outlier clipping (IQR method). Like `FeatureTransformer`,
+  the imputation values and outlier bounds are learned from the training
+  split only, then applied to test -- fitting them on the full dataset
+  before splitting would leak test-set statistics into training data (a real
+  bug in an earlier version of this pipeline: outlier bounds computed on the
+  full dataset actually changed 149 cells on the real dataset)
 - **`FeatureEngineer`** - derives 14 new columns:
   - Calorie balance: `Calorie_Balance`, `Calorie_Deviation_Pct`
   - Macro composition: `Protein_Ratio`, `Carb_Ratio`, `Fat_Ratio`, `Total_Macros_g`
@@ -351,10 +357,20 @@ contracts.
 
 ### Application Layer additions (`application/feature_engineering.py`)
 
-- **`PreprocessDataUseCase`** - orchestrates the pipeline (load → clean → engineer
-  → split → encode/scale → persist) and decides *which* raw/engineered columns are
-  numeric vs. categorical (an application-level decision, not an infrastructure
-  concern)
+- **`PreprocessDataUseCase`** - orchestrates the pipeline: load → dedup → split
+  → clean (fit on train only) → engineer → encode/scale (fit on train only) →
+  persist. Deduplication runs before the split; everything that learns
+  statistics from data runs after it, fit on train only
+- **`LEAKING_NUMERIC_COLUMNS`** - `Height_cm`, `Weight_kg`, `BMI`, and every
+  engineered column derived from them (`BMR`, `Activity_Calorie_Multiplier`,
+  `Protein_per_kg_Bodyweight`, `Water_Intake_ml_per_kg`, `Ideal_Weight_kg`,
+  `Weight_Deviation_kg`), excluded from `NUMERIC_FEATURES`. `Health_Status`
+  turns out to be an *exact* deterministic function of `BMI` in this dataset
+  (WHO BMI thresholds, zero exceptions across all 6000 rows) — training on
+  `BMI` gives a trivial 100% accuracy, and `Height_cm`/`Weight_kg` alone
+  reconstruct it almost perfectly (~98%). These columns are still computed by
+  `FeatureEngineer` (useful for analysis) but never reach the model. Full
+  investigation in `notebooks/03_model_training.ipynb`, section 1
 - **`PreprocessingResult`** - dataclass carrying `X_train`, `X_test`, `y_train`,
   `y_test`, `feature_names`, and `transformer_path` back to the caller
 
@@ -363,12 +379,83 @@ contracts.
 - **`HealthDietAPI.preprocess_data()`** - thin delegation to `PreprocessDataUseCase`,
   same pattern as `load_data()` / `get_health_statistics()`
 
-## Future Improvements
+## Phase 3: Model Training, Cross-Validation & Comparison
 
-### Phase 3: Model Training & ML Pipeline
-- [ ] Model training use case (scikit-learn classifiers on `Health_Status`)
-- [ ] Cross-validation & evaluation metrics
-- [ ] Model persistence (mirrors `FeatureTransformer.save/load`)
+Only boosting classifiers are supported (XGBoost, CatBoost) -- deliberately,
+not "any scikit-learn-compatible model": both track a per-iteration
+train/eval metric, which the rest of this phase is built around.
+
+### Infrastructure Layer additions (`infrastructure/models/`)
+
+- **`BaseModelWrapper`** - abstract base defining the shared contract: `fit`
+  (optionally given a validation set), `predict`, `predict_proba`, `save`,
+  `load`, `get_evals_result`. Subclasses implement `_build_model()` and `_fit()`
+- **`XGBoostWrapper`** / **`CatBoostWrapper`** - one module each. Neither
+  hardcodes a single hyperparameter default beyond `random_state`: every
+  other value (`n_estimators`/`iterations`, `max_depth`/`depth`,
+  `learning_rate`, `eval_metric`, `verbose`, ...) comes from
+  `settings.model.{xgboost,catboost}_params` (YAML) via `**hyperparameters`;
+  an unset key falls back to that library's own built-in default, never a
+  value invented in this codebase
+- **`get_evals_result()`** - normalizes each library's own eval-curve API
+  (`XGBClassifier.evals_result()`'s `validation_0`/`validation_1`,
+  `CatBoostClassifier.get_evals_result()`'s `learn`/`validation`) into a
+  common `{"train": {...}, "validation": {...}}` shape
+- CatBoost's `.predict()` returns shape `(n, 1)`; `CatBoostWrapper` flattens
+  it to 1D to match `XGBoostWrapper`
+
+### Application Layer additions
+
+- **`model_training.py`**
+  - `ModelType` / `MODEL_WRAPPER_REGISTRY` - the 2 supported models and their wrapper classes
+  - `compute_classification_metrics()` - accuracy, precision/recall/f1 (macro),
+    MCC (Matthews Correlation Coefficient), and a confusion matrix pinned to
+    every class the `LabelEncoder` knows about (so it's always the same shape
+    as `class_labels`, even when a class is absent from a particular small
+    test/fold batch)
+  - `TrainModelUseCase` - label-encodes the target once, trains one model type
+    against the held-out test set as its eval_set (for train/eval curves),
+    evaluates, and persists the model + label encoder. `hyperparameters` can
+    be passed to `HealthDietAPI.train_model()` explicitly to override the
+    YAML-configured ones for a single call
+- **`model_evaluation.py`**
+  - `CrossValidateModelUseCase` - stratified k-fold CV via an explicit fold
+    loop (our wrappers aren't scikit-learn estimators, so
+    `cross_val_score`/`clone()` can't drive them); reports per-fold metrics
+    plus their mean/std. Nothing is persisted -- it's a stability check, not
+    a training run
+  - `CompareModelsUseCase` - runs `TrainModelUseCase` for every registered
+    `ModelType` on the same train/test split, each with its own
+    hyperparameters
+  - `best_model()` - picks the `ModelType` with the highest value of a chosen
+    metric from a `CompareModelsUseCase` result. Defaults to **`mcc`**, not
+    `f1_macro` or `accuracy` -- MCC stays meaningful under class imbalance,
+    making it the more trustworthy tie-breaker on this dataset
+  - `save_best_model()` - calls `best_model()`, then copies the winner's
+    `model.joblib` / `label_encoder.joblib` into `output_dir/best/` alongside
+    a `metadata.json` (`model_type`, `selection_metric`,
+    `selection_metric_value`) -- a canonical location a downstream consumer
+    (e.g. a future Phase 4 API) can load "the" model from without knowing
+    which `ModelType` won. Both models are still saved under their own
+    `output_dir/<model_type>/` too, by `TrainModelUseCase`
+
+### Presentation Layer additions
+
+- **`HealthDietAPI.train_model(model_type, preprocessing_result, hyperparameters=None)`**
+  - `hyperparameters`, when given, replaces `settings.model.{model_type}_params`
+    entirely for that call (e.g. for a quick notebook experiment)
+- **`HealthDietAPI.cross_validate_model(model_type, preprocessing_result, n_splits=5)`**
+  - recombines `preprocessing_result.X_train`/`X_test` (and `y_train`/`y_test`)
+    before cross-validating, since CV should see every available row, not
+    just the train split
+- **`HealthDietAPI.compare_models(preprocessing_result)`**
+- **`HealthDietAPI.select_best_model(comparison, metric=None)`**
+  - resolves `metric` from `settings.model.selection_metric` ("mcc") when not
+    given, and delegates to `save_best_model()`
+- All hyperparameter-driven methods read from `settings.model.{xgboost,catboost}_params`
+  via a shared `_hyperparameters_for(model_type)` helper
+
+## Future Improvements
 
 ### Phase 4: API Layer
 - [ ] FastAPI endpoints

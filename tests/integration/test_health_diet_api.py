@@ -10,9 +10,12 @@ via `monkeypatch`, which restores them automatically after the test -- no
 cross-test pollution.
 """
 
+import json
+
 import pandas as pd
 import pytest
 
+from diet_health_predictor.application import ModelType, best_model
 from diet_health_predictor.infrastructure import DataCleaner
 from diet_health_predictor.presentation import HealthDietAPI
 
@@ -36,7 +39,8 @@ def clean_csv_path(mock_csv_path, tmp_path):
     Activity_Level value.
     """
     raw_df = pd.read_csv(mock_csv_path)
-    clean_df = DataCleaner().clean(raw_df)
+    cleaner = DataCleaner()
+    clean_df = cleaner.fit_transform(cleaner.drop_duplicates(raw_df))
     path = tmp_path / "clean_mock_diet_data.csv"
     clean_df.to_csv(path, index=False)
     return path
@@ -72,6 +76,108 @@ class TestHealthDietAPIIntegration:
         assert len(result.X_train) + len(result.X_test) == 16  # deduplicated by DataCleaner
         assert (tmp_path / "feature_transformer.joblib").exists()
         assert (tmp_path / "X_train.csv").exists()
+
+    @pytest.mark.parametrize("model_type", list(ModelType))
+    def test_train_model_runs_the_full_phase_3_pipeline(
+        self, model_type, api, mock_csv_path, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(api, "data_path", mock_csv_path)
+        monkeypatch.setattr(api.settings.model, "models_output_dir", str(tmp_path / "models"))
+
+        preprocessing_result = api.preprocess_data()
+        result = api.train_model(model_type, preprocessing_result)
+
+        assert 0.0 <= result.metrics["accuracy"] <= 1.0
+        assert set(result.evals_result.keys()) == {"train", "validation"}
+        assert (tmp_path / "models" / model_type.value / "model.joblib").exists()
+
+    def test_train_model_uses_yaml_configured_hyperparameters(
+        self, api, mock_csv_path, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(api, "data_path", mock_csv_path)
+        monkeypatch.setattr(api.settings.model, "models_output_dir", str(tmp_path / "models"))
+        monkeypatch.setattr(api.settings.model, "xgboost_params", {"n_estimators": 7})
+
+        preprocessing_result = api.preprocess_data()
+        result = api.train_model(ModelType.XGBOOST, preprocessing_result)
+
+        assert result.model._model.n_estimators == 7
+
+    def test_train_model_explicit_hyperparameters_override_yaml(
+        self, api, mock_csv_path, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(api, "data_path", mock_csv_path)
+        monkeypatch.setattr(api.settings.model, "models_output_dir", str(tmp_path / "models"))
+        # YAML says 7; the explicit call-time override below should win instead.
+        monkeypatch.setattr(api.settings.model, "xgboost_params", {"n_estimators": 7})
+
+        preprocessing_result = api.preprocess_data()
+        result = api.train_model(
+            ModelType.XGBOOST, preprocessing_result, hyperparameters={"n_estimators": 13}
+        )
+
+        assert result.model._model.n_estimators == 13
+
+    @pytest.mark.parametrize("model_type", list(ModelType))
+    def test_cross_validate_model_runs_on_the_full_preprocessed_dataset(
+        self, model_type, api, mock_csv_path, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(api, "data_path", mock_csv_path)
+        monkeypatch.setattr(api.settings.model, "models_output_dir", str(tmp_path / "models"))
+
+        preprocessing_result = api.preprocess_data()
+        # The mock dataset's smallest class has only 2 members after cleaning
+        # (see tests/fixtures/README.md); n_splits can't exceed that.
+        result = api.cross_validate_model(model_type, preprocessing_result, n_splits=2)
+
+        assert result.n_splits == 2
+        assert len(result.fold_metrics) == 2
+        assert 0.0 <= result.mean_metrics["accuracy"] <= 1.0
+
+    def test_compare_models_trains_every_model_type(
+        self, api, mock_csv_path, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(api, "data_path", mock_csv_path)
+        monkeypatch.setattr(api.settings.model, "models_output_dir", str(tmp_path / "models"))
+
+        preprocessing_result = api.preprocess_data()
+        results = api.compare_models(preprocessing_result)
+
+        assert set(results.keys()) == set(ModelType)
+        assert best_model(results, metric="f1_macro") in ModelType
+
+    def test_select_best_model_persists_the_winner_to_the_best_directory(
+        self, api, mock_csv_path, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(api, "data_path", mock_csv_path)
+        monkeypatch.setattr(api.settings.model, "models_output_dir", str(tmp_path / "models"))
+
+        preprocessing_result = api.preprocess_data()
+        comparison = api.compare_models(preprocessing_result)
+
+        winner = api.select_best_model(comparison)
+
+        assert winner in ModelType
+        best_dir = tmp_path / "models" / "best"
+        assert (best_dir / "model.joblib").exists()
+        assert (best_dir / "label_encoder.joblib").exists()
+
+        metadata = json.loads((best_dir / "metadata.json").read_text())
+        assert metadata["model_type"] == winner.value
+        assert metadata["selection_metric"] == "mcc"  # settings.model.selection_metric default
+
+    def test_select_best_model_respects_an_explicit_metric_override(
+        self, api, mock_csv_path, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(api, "data_path", mock_csv_path)
+        monkeypatch.setattr(api.settings.model, "models_output_dir", str(tmp_path / "models"))
+
+        preprocessing_result = api.preprocess_data()
+        comparison = api.compare_models(preprocessing_result)
+
+        winner = api.select_best_model(comparison, metric="accuracy")
+
+        assert winner == best_model(comparison, metric="accuracy")
 
     def test_print_summary_prints_the_dataset_overview(
         self, api, clean_csv_path, monkeypatch, capsys

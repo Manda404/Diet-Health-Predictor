@@ -35,6 +35,15 @@ class ModelConfig(BaseModel):
 
     test_size: float = Field(default=0.2)
     random_state: int = Field(default=42)
+    models_output_dir: str = Field(default="models")
+    # Passed straight to the wrapper constructor (XGBClassifier/CatBoostClassifier
+    # kwargs); leave empty to fall back to each wrapper's built-in defaults.
+    xgboost_params: dict = Field(default_factory=dict)
+    catboost_params: dict = Field(default_factory=dict)
+    # Metric HealthDietAPI.select_best_model() uses to pick a winner from
+    # compare_models(): one of the keys in ModelTrainingResult.metrics
+    # (accuracy, precision_macro, recall_macro, f1_macro, mcc).
+    selection_metric: str = Field(default="mcc")
 
 
 class APIConfig(BaseModel):
